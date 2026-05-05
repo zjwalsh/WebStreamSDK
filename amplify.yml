@@ -6,7 +6,7 @@ frontend:
         - yarn install
     build:
       commands:
-        - yarn build
+        - CI=false yarn build
   artifacts:
     baseDirectory: build
     files:
