@@ -1,12 +1,15 @@
-import React, { useEffect, useState, useRef } from 'react';
-import { Desktop } from "@wxcc-desktop/sdk";
+import React, { useEffect, useRef } from 'react';
+import { useState } from 'react';
 import Webex from "webex";
 import './App.css';
 
-const App = () => {
-  const [interactionId, setInteractionId] = useState(null);
+// interactionId is injected as a DOM property by the WxCC Desktop store
+// via the "properties" block in the layout JSON. The Desktop evaluates
+// $STORE.agentContact.taskSelected.interactionId and sets it reactively.
+const App = ({ interactionId }) => {
   const [isRecording, setIsRecording] = useState(false);
   const [status, setStatus] = useState("Ready");
+  const prevInteractionIdRef = useRef(null);
 
   const mediaRecorderRef = useRef(null);
   const chunksRef = useRef([]);
@@ -15,51 +18,20 @@ const App = () => {
   const webexRef = useRef(null);
 
   useEffect(() => {
-    const initSDK = async () => {
-      // config.init() fetches widget metadata from the desktop shell.
-      // It fails for custom widgets because the shell has no record of them.
-      // We catch and continue — event registration works independently.
-      try {
-        await Desktop.config.init();
-        console.log("[Signature] config.init() succeeded");
-      } catch (err) {
-        console.warn("[Signature] config.init() failed (expected for custom widgets):", err.message);
-      }
-
-      // Register events and read current task outside the init try/catch
-      // so a failed init doesn't block either operation.
-      try {
-        const selectedTask = Desktop.agentContact.taskSelected;
-        console.log("[Signature] taskSelected at mount:", selectedTask);
-        if (selectedTask?.interactionId) {
-          setInteractionId(selectedTask.interactionId);
-          prepareAudioContext();
-        }
-
-        Desktop.agentContact.addEventListener("eAgentContact", (event) => {
-          console.log("[Signature] eAgentContact state:", event.data?.state, event.data);
-          if (event.data.state === "Connected") {
-            setInteractionId(event.data.interactionId);
-            prepareAudioContext();
-          } else if (event.data.state === "Ended") {
-            setInteractionId(null);
-            setStatus("Ready");
-          }
-        });
-
-        console.log("[Signature] Event listener registered");
-      } catch (err) {
-        console.error("[Signature] Event registration failed:", err);
-      }
-    };
-
-    initSDK();
-
     webexRef.current = Webex.init({
       config: { meetings: { deviceType: 'WEB' } },
       credentials: { access_token: "REPLACE_WITH_AGENT_OAUTH_TOKEN" }
     });
   }, []);
+
+  useEffect(() => {
+    if (interactionId && interactionId !== prevInteractionIdRef.current) {
+      prepareAudioContext();
+    } else if (!interactionId && prevInteractionIdRef.current) {
+      setStatus("Ready");
+    }
+    prevInteractionIdRef.current = interactionId;
+  }, [interactionId]);
 
   const prepareAudioContext = () => {
     audioCtxRef.current = new (window.AudioContext || window.webkitAudioContext)();
