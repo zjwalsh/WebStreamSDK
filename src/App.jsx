@@ -7,7 +7,7 @@ const App = () => {
   const [interactionId, setInteractionId] = useState(null);
   const [isRecording, setIsRecording] = useState(false);
   const [status, setStatus] = useState("Ready");
-  
+
   const mediaRecorderRef = useRef(null);
   const chunksRef = useRef([]);
   const audioCtxRef = useRef(null);
@@ -17,10 +17,7 @@ const App = () => {
   useEffect(() => {
     const initSDK = async () => {
       try {
-        // Initialize Desktop SDK
         await Desktop.config.init();
-        
-        // Listen for active calls
         Desktop.agentContact.addEventListener("eAgentContact", (event) => {
           if (event.data.state === "Connected") {
             setInteractionId(event.data.interactionId);
@@ -30,20 +27,17 @@ const App = () => {
             setStatus("Ready");
           }
         });
-
-        // Initialize Webex SDK (Requires Agent Token)
-        // In production, fetch this via your backend or Desktop.agentContact.getToken()
-        webexRef.current = Webex.init({
-          config: { meetings: { deviceType: 'WEB' } },
-          credentials: { access_token: "REPLACE_WITH_AGENT_OAUTH_TOKEN" }
-        });
-
       } catch (err) {
-        console.error("SDK Init Failed:", err);
+        console.error("Desktop SDK Init Failed:", err);
       }
     };
 
     initSDK();
+
+    webexRef.current = Webex.init({
+      config: { meetings: { deviceType: 'WEB' } },
+      credentials: { access_token: "REPLACE_WITH_AGENT_OAUTH_TOKEN" }
+    });
   }, []);
 
   const prepareAudioContext = () => {

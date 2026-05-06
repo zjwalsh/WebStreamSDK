@@ -404,6 +404,18 @@
     tslib "^2.8.1"
     webcrypto-core "^1.9.2"
 
+"@r2wc/core@^1.3.1":
+  version "1.3.1"
+  resolved "https://registry.yarnpkg.com/@r2wc/core/-/core-1.3.1.tgz#c400f25dec2a4447086b07d38375c0e33a5185b0"
+  integrity sha512-x9nMthXsTjqr1alE+boX1Zuzqb6/oFi4wAOdWaWcWKcrwq9M/PATK74c3DFJfRnUOkYWPlsz0e4CsFBXJGStSA==
+
+"@r2wc/react-to-web-component@^2.1.1":
+  version "2.1.1"
+  resolved "https://registry.yarnpkg.com/@r2wc/react-to-web-component/-/react-to-web-component-2.1.1.tgz#036150b0f434ac8d59b868a3b545876399747963"
+  integrity sha512-AXsIdjxK9ALv0ySWjVadUg3uJ5nS8L4H8eZMYaaWuM+9LNj9DP/r4+sMjI+6jZwb7/FqwxRPHQUq8yimQwBfOA==
+  dependencies:
+    "@r2wc/core" "^1.3.1"
+
 "@rolldown/pluginutils@1.0.0-beta.27":
   version "1.0.0-beta.27"
   resolved "https://registry.yarnpkg.com/@rolldown/pluginutils/-/pluginutils-1.0.0-beta.27.tgz#47d2bf4cef6d470b22f5831b420f8964e0bf755f"
@@ -4256,6 +4268,11 @@ verror@1.10.0:
     assert-plus "^1.0.0"
     core-util-is "1.0.2"
     extsprintf "^1.2.0"
+
+vite-plugin-css-injected-by-js@4:
+  version "4.0.1"
+  resolved "https://registry.yarnpkg.com/vite-plugin-css-injected-by-js/-/vite-plugin-css-injected-by-js-4.0.1.tgz#ed69dd8f04800f9e3c7a17c3a2e3819eede6092e"
+  integrity sha512-WfyRojojQyAO/KzWf+efcXpTPv6zJPXaRmr9EYq5a4v5I3PWCR7kR01hiri2lW6+rHm3a57kpwsf+iahIJi1Qw==
 
 vite-plugin-node-polyfills@^0.26.0:
   version "0.26.0"
