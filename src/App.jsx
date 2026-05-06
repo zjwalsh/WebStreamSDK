@@ -95,25 +95,56 @@ const App = ({ interactionId: widgetInteractionId = null }) => {
     if (mediaRecorderRef.current) {
       mediaRecorderRef.current.stop();
       setIsRecording(false);
-      setStatus("Processing & Sending...");
+      setStatus("Processing & Saving...");
     }
+  };
+
+  const saveRecordingToDisk = async (blob, fileName) => {
+    if (window.showSaveFilePicker) {
+      const fileHandle = await window.showSaveFilePicker({
+        suggestedName: fileName,
+        types: [
+          {
+            description: 'WebM audio',
+            accept: {
+              'audio/webm': ['.webm']
+            }
+          }
+        ]
+      });
+
+      const writable = await fileHandle.createWritable();
+      await writable.write(blob);
+      await writable.close();
+      return;
+    }
+
+    const downloadUrl = URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = downloadUrl;
+    anchor.download = fileName;
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    URL.revokeObjectURL(downloadUrl);
   };
 
   const uploadRecording = async () => {
     const blob = new Blob(chunksRef.current, { type: 'audio/webm' });
-    const formData = new FormData();
-    formData.append("file", blob, `signature_${interactionId}.webm`);
-    formData.append("interactionId", interactionId);
+    const timestamp = new Date().toISOString().replace(/[.:]/g, '-');
+    const fileName = `signature_${interactionId}_${timestamp}.webm`;
 
     try {
-      const response = await fetch("https://your-third-party-api.com/upload", {
-        method: "POST",
-        body: formData
-      });
-      if (response.ok) setStatus("Signature Sent Successfully!");
-      else setStatus("Upload Failed");
+      await saveRecordingToDisk(blob, fileName);
+      setStatus("Signature saved to disk");
     } catch (err) {
-      setStatus("Network Error during upload");
+      if (err?.name === 'AbortError') {
+        setStatus("Save cancelled");
+        return;
+      }
+
+      console.error("Save Error:", err);
+      setStatus("Error saving recording");
     }
   };
 
