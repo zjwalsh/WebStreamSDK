@@ -3,10 +3,80 @@ import { Desktop } from "@wxcc-desktop/sdk";
 import Webex from "webex";
 import './App.css';
 
+const CONTACT_EVENTS = [
+  'eAgentContact',
+  'eAgentContactAssigned',
+  'eAgentOfferContact',
+  'eAgentContactEnded'
+];
+
+const collectInteractionId = (value) => {
+  if (!value) {
+    return null;
+  }
+
+  if (typeof value === 'string') {
+    return value;
+  }
+
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const interactionId = collectInteractionId(item);
+      if (interactionId) {
+        return interactionId;
+      }
+    }
+    return null;
+  }
+
+  if (typeof value !== 'object') {
+    return null;
+  }
+
+  const directKeys = ['interactionId', 'interactionID', 'taskId'];
+  for (const key of directKeys) {
+    if (typeof value[key] === 'string' && value[key]) {
+      return value[key];
+    }
+  }
+
+  const nestedKeys = ['data', 'task', 'contact', 'payload', 'detail'];
+  for (const key of nestedKeys) {
+    const interactionId = collectInteractionId(value[key]);
+    if (interactionId) {
+      return interactionId;
+    }
+  }
+
+  return null;
+};
+
+const extractInteractionIdFromTaskMap = (taskMap) => {
+  if (!taskMap) {
+    return null;
+  }
+
+  const tasks = Array.isArray(taskMap)
+    ? taskMap
+    : Object.values(taskMap.tasks || taskMap).filter(Boolean);
+
+  for (const task of tasks) {
+    const interactionId = collectInteractionId(task);
+    if (interactionId) {
+      return interactionId;
+    }
+  }
+
+  return null;
+};
+
 const App = ({ interactionId: widgetInteractionId = null }) => {
   const [desktopInteractionId, setDesktopInteractionId] = useState(null);
   const [isRecording, setIsRecording] = useState(false);
   const [status, setStatus] = useState("Ready");
+  const [lastEvent, setLastEvent] = useState('none');
+  const [taskMapInteractionId, setTaskMapInteractionId] = useState(null);
+  const [isFramed, setIsFramed] = useState(false);
   const prevIdRef = useRef(null);
 
   const mediaRecorderRef = useRef(null);
@@ -17,23 +87,109 @@ const App = ({ interactionId: widgetInteractionId = null }) => {
   const interactionId = widgetInteractionId ?? desktopInteractionId;
 
   useEffect(() => {
-    if (widgetInteractionId) {
-      return undefined;
-    }
+    setIsFramed(window.self !== window.top);
+  }, []);
 
-    const poll = setInterval(() => {
+  useEffect(() => {
+    let isMounted = true;
+
+    const initializeDesktop = async () => {
       try {
-        const id = Desktop.agentContact.taskSelected?.interactionId || null;
-        setDesktopInteractionId(id);
-      } catch (e) {}
-    }, 1000);
+        Desktop.config.init({
+          widgetName: 'wxcc-signature-widget',
+          widgetProvider: 'Amplify'
+        });
+      } catch (err) {
+        console.warn('[Signature] Desktop.config.init failed', err);
+      }
 
-    webexRef.current = Webex.init({
-      config: { meetings: { deviceType: 'WEB' } },
-      credentials: { access_token: "REPLACE_WITH_AGENT_OAUTH_TOKEN" }
+      try {
+        const taskMap = await Desktop.actions.getTaskMap();
+        const currentInteractionId = extractInteractionIdFromTaskMap(taskMap);
+        if (isMounted) {
+          setTaskMapInteractionId(currentInteractionId);
+        }
+        if (isMounted && currentInteractionId) {
+          console.log('[Signature] task map interaction:', currentInteractionId);
+          setDesktopInteractionId(currentInteractionId);
+          setLastEvent('task-map');
+        }
+      } catch (err) {
+        console.warn('[Signature] Desktop.actions.getTaskMap failed', err);
+      }
+
+      try {
+        const token = await Desktop.actions.getToken();
+        webexRef.current = Webex.init({
+          config: { meetings: { deviceType: 'WEB' } },
+          credentials: { access_token: token || 'REPLACE_WITH_AGENT_OAUTH_TOKEN' }
+        });
+      } catch (err) {
+        console.warn('[Signature] Desktop.actions.getToken failed', err);
+        webexRef.current = Webex.init({
+          config: { meetings: { deviceType: 'WEB' } },
+          credentials: { access_token: 'REPLACE_WITH_AGENT_OAUTH_TOKEN' }
+        });
+      }
+    };
+
+    const listeners = CONTACT_EVENTS.map((eventName) => {
+      const listener = (message) => {
+        const nextInteractionId = collectInteractionId(message);
+        console.log(`[Signature] ${eventName}:`, message);
+        setLastEvent(eventName);
+
+        if (nextInteractionId) {
+          setDesktopInteractionId(nextInteractionId);
+        }
+
+        if (eventName === 'eAgentContactEnded') {
+          setDesktopInteractionId(null);
+        }
+      };
+
+      try {
+        Desktop.agentContact.addEventListener(eventName, listener);
+      } catch (err) {
+        console.warn(`[Signature] failed to subscribe to ${eventName}`, err);
+      }
+
+      return { eventName, listener };
     });
 
-    return () => clearInterval(poll);
+    const poll = window.setInterval(async () => {
+      if (widgetInteractionId) {
+        return;
+      }
+
+      try {
+        const taskMap = await Desktop.actions.getTaskMap();
+        const currentInteractionId = extractInteractionIdFromTaskMap(taskMap);
+        setTaskMapInteractionId(currentInteractionId);
+        setDesktopInteractionId(currentInteractionId);
+      } catch (err) {
+        try {
+          const id = Desktop.agentContact.taskSelected?.interactionId || null;
+          setDesktopInteractionId(id);
+        } catch (fallbackError) {
+          console.warn('[Signature] contact polling failed', fallbackError);
+        }
+      }
+    }, 1000);
+
+    initializeDesktop();
+
+    return () => {
+      isMounted = false;
+      window.clearInterval(poll);
+      for (const { eventName, listener } of listeners) {
+        try {
+          Desktop.agentContact.removeEventListener(eventName, listener);
+        } catch (err) {
+          console.warn(`[Signature] failed to remove ${eventName}`, err);
+        }
+      }
+    };
   }, [widgetInteractionId]);
 
   useEffect(() => {
@@ -153,6 +309,31 @@ const App = ({ interactionId: widgetInteractionId = null }) => {
       <h3>Telephonic Signature</h3>
       <div className="status-badge">{status}</div>
       <p>Interaction: {interactionId || "None"}</p>
+      <p>Last event: {widgetInteractionId ? 'widget-prop' : lastEvent}</p>
+
+      <div className="diagnostics-panel">
+        <div className="diagnostics-title">Diagnostics</div>
+        <div className="diagnostics-row">
+          <span className="diagnostics-label">iframe</span>
+          <span className="diagnostics-value">{isFramed ? 'yes' : 'no'}</span>
+        </div>
+        <div className="diagnostics-row">
+          <span className="diagnostics-label">prop interactionId</span>
+          <span className="diagnostics-value">{widgetInteractionId || 'None'}</span>
+        </div>
+        <div className="diagnostics-row">
+          <span className="diagnostics-label">taskMap interactionId</span>
+          <span className="diagnostics-value">{taskMapInteractionId || 'None'}</span>
+        </div>
+        <div className="diagnostics-row">
+          <span className="diagnostics-label">desktop interactionId</span>
+          <span className="diagnostics-value">{desktopInteractionId || 'None'}</span>
+        </div>
+        <div className="diagnostics-row">
+          <span className="diagnostics-label">last desktop event</span>
+          <span className="diagnostics-value">{lastEvent}</span>
+        </div>
+      </div>
       
       <div className="controls">
         {!isRecording ? (

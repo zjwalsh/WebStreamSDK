@@ -1,38 +1,89 @@
-.App {
-  text-align: center;
+.widget-container {
+  font-family: "Segoe UI", sans-serif;
+  padding: 16px;
+  color: #17212b;
+  background: linear-gradient(180deg, #f7f9fc 0%, #eef3f8 100%);
 }
 
-.App-logo {
-  height: 40vmin;
-  pointer-events: none;
+.widget-container h3 {
+  margin: 0 0 12px;
+  font-size: 18px;
 }
 
-@media (prefers-reduced-motion: no-preference) {
-  .App-logo {
-    animation: App-logo-spin infinite 20s linear;
-  }
+.status-badge {
+  display: inline-block;
+  margin-bottom: 12px;
+  padding: 6px 10px;
+  border-radius: 999px;
+  background: #dfeeff;
+  color: #0f548c;
+  font-size: 13px;
+  font-weight: 600;
 }
 
-.App-header {
-  background-color: #282c34;
-  min-height: 100vh;
+.controls {
+  margin-top: 16px;
+}
+
+.btn-start,
+.btn-stop {
+  width: 100%;
+  border: 0;
+  border-radius: 10px;
+  padding: 12px 14px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.btn-start {
+  background: #0f62fe;
+  color: #ffffff;
+}
+
+.btn-start:disabled {
+  background: #b9c7d8;
+  color: #5b6b7c;
+  cursor: not-allowed;
+}
+
+.btn-stop {
+  background: #d83b01;
+  color: #ffffff;
+}
+
+.diagnostics-panel {
+  margin-top: 14px;
+  padding: 12px;
+  border: 1px solid #c9d7e6;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.88);
+}
+
+.diagnostics-title {
+  margin-bottom: 8px;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #5b6b7c;
+}
+
+.diagnostics-row {
   display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  font-size: calc(10px + 2vmin);
-  color: white;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 4px 0;
+  font-size: 12px;
 }
 
-.App-link {
-  color: #61dafb;
+.diagnostics-label {
+  color: #5b6b7c;
 }
 
-@keyframes App-logo-spin {
-  from {
-    transform: rotate(0deg);
-  }
-  to {
-    transform: rotate(360deg);
-  }
+.diagnostics-value {
+  color: #17212b;
+  font-weight: 600;
+  text-align: right;
+  word-break: break-word;
 }
