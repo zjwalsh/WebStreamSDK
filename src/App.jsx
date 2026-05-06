@@ -70,12 +70,42 @@ const extractInteractionIdFromTaskMap = (taskMap) => {
   return null;
 };
 
+const getStoreState = () => {
+  const store = window.$Store;
+
+  if (!store || typeof store.getState !== 'function') {
+    return null;
+  }
+
+  try {
+    return store.getState();
+  } catch (err) {
+    console.warn('[Signature] window.$Store.getState failed', err);
+    return null;
+  }
+};
+
+const extractInteractionIdFromStore = (state) => {
+  if (!state || typeof state !== 'object') {
+    return null;
+  }
+
+  return (
+    state.agentContact?.taskSelected?.interactionId ||
+    extractInteractionIdFromTaskMap(state.taskMap) ||
+    null
+  );
+};
+
 const App = ({ interactionId: widgetInteractionId = null }) => {
   const [desktopInteractionId, setDesktopInteractionId] = useState(null);
   const [isRecording, setIsRecording] = useState(false);
   const [status, setStatus] = useState("Ready");
   const [lastEvent, setLastEvent] = useState('none');
   const [taskMapInteractionId, setTaskMapInteractionId] = useState(null);
+  const [storeInteractionId, setStoreInteractionId] = useState(null);
+  const [hasStoreBridge, setHasStoreBridge] = useState(false);
+  const [hasAgentService, setHasAgentService] = useState(false);
   const [isFramed, setIsFramed] = useState(false);
   const prevIdRef = useRef(null);
 
@@ -84,16 +114,28 @@ const App = ({ interactionId: widgetInteractionId = null }) => {
   const audioCtxRef = useRef(null);
   const mixedDestRef = useRef(null);
   const webexRef = useRef(null);
-  const interactionId = widgetInteractionId ?? desktopInteractionId;
+  const interactionId = widgetInteractionId ?? storeInteractionId ?? desktopInteractionId;
 
   useEffect(() => {
     setIsFramed(window.self !== window.top);
+    setHasAgentService(Boolean(window.AGENTX_SERVICE));
+    setHasStoreBridge(Boolean(window.$Store?.getState));
   }, []);
 
   useEffect(() => {
     let isMounted = true;
+    let unsubscribeStore;
 
     const initializeDesktop = async () => {
+      const initialStoreState = getStoreState();
+      const initialStoreInteractionId = extractInteractionIdFromStore(initialStoreState);
+
+      if (isMounted && initialStoreInteractionId) {
+        console.log('[Signature] store interaction:', initialStoreInteractionId);
+        setStoreInteractionId(initialStoreInteractionId);
+        setLastEvent('store-snapshot');
+      }
+
       try {
         Desktop.config.init({
           widgetName: 'wxcc-signature-widget',
@@ -133,6 +175,20 @@ const App = ({ interactionId: widgetInteractionId = null }) => {
       }
     };
 
+    const store = window.$Store;
+    if (store?.subscribe) {
+      unsubscribeStore = store.subscribe(() => {
+        const nextStoreState = getStoreState();
+        const nextStoreInteractionId = extractInteractionIdFromStore(nextStoreState);
+        setHasStoreBridge(true);
+        setStoreInteractionId(nextStoreInteractionId);
+
+        if (nextStoreInteractionId) {
+          setLastEvent('store-update');
+        }
+      });
+    }
+
     const listeners = CONTACT_EVENTS.map((eventName) => {
       const listener = (message) => {
         const nextInteractionId = collectInteractionId(message);
@@ -162,6 +218,12 @@ const App = ({ interactionId: widgetInteractionId = null }) => {
         return;
       }
 
+      const currentStoreState = getStoreState();
+      const currentStoreInteractionId = extractInteractionIdFromStore(currentStoreState);
+      setHasStoreBridge(Boolean(window.$Store?.getState));
+      setHasAgentService(Boolean(window.AGENTX_SERVICE));
+      setStoreInteractionId(currentStoreInteractionId);
+
       try {
         const taskMap = await Desktop.actions.getTaskMap();
         const currentInteractionId = extractInteractionIdFromTaskMap(taskMap);
@@ -181,6 +243,7 @@ const App = ({ interactionId: widgetInteractionId = null }) => {
 
     return () => {
       isMounted = false;
+      unsubscribeStore?.();
       window.clearInterval(poll);
       for (const { eventName, listener } of listeners) {
         try {
@@ -326,8 +389,20 @@ const App = ({ interactionId: widgetInteractionId = null }) => {
           <span className="diagnostics-value">{taskMapInteractionId || 'None'}</span>
         </div>
         <div className="diagnostics-row">
+          <span className="diagnostics-label">$Store available</span>
+          <span className="diagnostics-value">{hasStoreBridge ? 'yes' : 'no'}</span>
+        </div>
+        <div className="diagnostics-row">
+          <span className="diagnostics-label">$Store interactionId</span>
+          <span className="diagnostics-value">{storeInteractionId || 'None'}</span>
+        </div>
+        <div className="diagnostics-row">
           <span className="diagnostics-label">desktop interactionId</span>
           <span className="diagnostics-value">{desktopInteractionId || 'None'}</span>
+        </div>
+        <div className="diagnostics-row">
+          <span className="diagnostics-label">AGENTX_SERVICE</span>
+          <span className="diagnostics-value">{hasAgentService ? 'yes' : 'no'}</span>
         </div>
         <div className="diagnostics-row">
           <span className="diagnostics-label">last desktop event</span>
