@@ -25,6 +25,7 @@ const App = ({ interactionId }) => {
   }, []);
 
   useEffect(() => {
+    console.log("[Signature] interactionId prop:", interactionId);
     if (interactionId && interactionId !== prevInteractionIdRef.current) {
       prepareAudioContext();
     } else if (!interactionId && prevInteractionIdRef.current) {
