@@ -16,13 +16,21 @@ const App = () => {
 
   useEffect(() => {
     const initSDK = async () => {
+      // config.init() fetches widget metadata from the desktop shell.
+      // It fails for custom widgets because the shell has no record of them.
+      // We catch and continue — event registration works independently.
       try {
         await Desktop.config.init();
-        console.log("[Signature] SDK initialized");
+        console.log("[Signature] config.init() succeeded");
+      } catch (err) {
+        console.warn("[Signature] config.init() failed (expected for custom widgets):", err.message);
+      }
 
-        // Catch calls that were already active before this widget loaded
+      // Register events and read current task outside the init try/catch
+      // so a failed init doesn't block either operation.
+      try {
         const selectedTask = Desktop.agentContact.taskSelected;
-        console.log("[Signature] taskSelected at init:", selectedTask);
+        console.log("[Signature] taskSelected at mount:", selectedTask);
         if (selectedTask?.interactionId) {
           setInteractionId(selectedTask.interactionId);
           prepareAudioContext();
@@ -38,8 +46,10 @@ const App = () => {
             setStatus("Ready");
           }
         });
+
+        console.log("[Signature] Event listener registered");
       } catch (err) {
-        console.error("[Signature] SDK Init Failed:", err);
+        console.error("[Signature] Event registration failed:", err);
       }
     };
 
