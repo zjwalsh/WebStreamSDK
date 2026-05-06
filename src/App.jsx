@@ -1,40 +1,58 @@
-import React, { useEffect, useRef } from 'react';
-import { useState } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
+import { Desktop } from "@wxcc-desktop/sdk";
 import Webex from "webex";
 import './App.css';
 
-// interactionId is injected as a DOM property by the WxCC Desktop store
-// via the "properties" block in the layout JSON. The Desktop evaluates
-// $STORE.agentContact.taskSelected.interactionId and sets it reactively.
-const App = ({ interactionId }) => {
+const App = ({ interactionId: widgetInteractionId = null }) => {
+  const [desktopInteractionId, setDesktopInteractionId] = useState(null);
   const [isRecording, setIsRecording] = useState(false);
   const [status, setStatus] = useState("Ready");
-  const prevInteractionIdRef = useRef(null);
+  const prevIdRef = useRef(null);
 
   const mediaRecorderRef = useRef(null);
   const chunksRef = useRef([]);
   const audioCtxRef = useRef(null);
   const mixedDestRef = useRef(null);
   const webexRef = useRef(null);
+  const interactionId = widgetInteractionId ?? desktopInteractionId;
 
   useEffect(() => {
+    if (widgetInteractionId) {
+      return undefined;
+    }
+
+    const poll = setInterval(() => {
+      try {
+        const id = Desktop.agentContact.taskSelected?.interactionId || null;
+        setDesktopInteractionId(id);
+      } catch (e) {}
+    }, 1000);
+
     webexRef.current = Webex.init({
       config: { meetings: { deviceType: 'WEB' } },
       credentials: { access_token: "REPLACE_WITH_AGENT_OAUTH_TOKEN" }
     });
-  }, []);
+
+    return () => clearInterval(poll);
+  }, [widgetInteractionId]);
 
   useEffect(() => {
-    console.log("[Signature] interactionId prop:", interactionId);
-    if (interactionId && interactionId !== prevInteractionIdRef.current) {
+    if (interactionId && interactionId !== prevIdRef.current) {
+      console.log("[Signature] call connected:", interactionId);
+      setStatus("Call detected - ready to record");
       prepareAudioContext();
-    } else if (!interactionId && prevInteractionIdRef.current) {
+    } else if (!interactionId && prevIdRef.current) {
+      console.log("[Signature] call ended");
       setStatus("Ready");
     }
-    prevInteractionIdRef.current = interactionId;
+    prevIdRef.current = interactionId;
   }, [interactionId]);
 
   const prepareAudioContext = () => {
+    if (audioCtxRef.current) {
+      return;
+    }
+
     audioCtxRef.current = new (window.AudioContext || window.webkitAudioContext)();
     mixedDestRef.current = audioCtxRef.current.createMediaStreamDestination();
   };
