@@ -18,7 +18,18 @@ const App = () => {
     const initSDK = async () => {
       try {
         await Desktop.config.init();
+        console.log("[Signature] SDK initialized");
+
+        // Catch calls that were already active before this widget loaded
+        const selectedTask = Desktop.agentContact.taskSelected;
+        console.log("[Signature] taskSelected at init:", selectedTask);
+        if (selectedTask?.interactionId) {
+          setInteractionId(selectedTask.interactionId);
+          prepareAudioContext();
+        }
+
         Desktop.agentContact.addEventListener("eAgentContact", (event) => {
+          console.log("[Signature] eAgentContact state:", event.data?.state, event.data);
           if (event.data.state === "Connected") {
             setInteractionId(event.data.interactionId);
             prepareAudioContext();
@@ -28,7 +39,7 @@ const App = () => {
           }
         });
       } catch (err) {
-        console.error("Desktop SDK Init Failed:", err);
+        console.error("[Signature] SDK Init Failed:", err);
       }
     };
 
