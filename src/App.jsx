@@ -312,7 +312,7 @@ const App = ({ interactionId: widgetInteractionId = null }) => {
       setIsRecording(true);
     } catch (err) {
       console.error("Recording Start Error:", err);
-      setStatus("Error starting recording");
+      setStatus(err?.message || "Error starting recording");
     }
   };
 
