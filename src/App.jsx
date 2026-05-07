@@ -232,6 +232,67 @@ const findCallingCallForInteraction = (webex, interactionId) => {
   };
 };
 
+const streamFromTrack = (track) => {
+  if (!track || track.kind !== 'audio') {
+    return null;
+  }
+
+  return new MediaStream([track]);
+};
+
+const getLocalStreamFromCall = (call) => {
+  const outputStream = call?.localAudioStream?.outputStream;
+
+  if (outputStream instanceof MediaStream && outputStream.getAudioTracks().length) {
+    return outputStream;
+  }
+
+  return null;
+};
+
+const getRemoteStreamFromCall = (call, remoteTrack) => {
+  if (remoteTrack) {
+    return streamFromTrack(remoteTrack);
+  }
+
+  const mediaConnection = call?.mediaConnection;
+  if (!mediaConnection || typeof mediaConnection !== 'object') {
+    return null;
+  }
+
+  const directTracks = [
+    mediaConnection.remoteAudioTrack,
+    mediaConnection.remoteTrack,
+    mediaConnection.audioTrack
+  ].filter(Boolean);
+
+  for (const track of directTracks) {
+    const stream = streamFromTrack(track);
+    if (stream) {
+      return stream;
+    }
+  }
+
+  const peerConnections = [
+    mediaConnection.peerConnection,
+    mediaConnection._peerConnection,
+    mediaConnection.pc,
+    mediaConnection.rtcPeerConnection
+  ].filter(Boolean);
+
+  for (const peerConnection of peerConnections) {
+    const receiverTracks = (peerConnection.getReceivers?.() || [])
+      .map((receiver) => receiver?.track)
+      .filter((track) => track?.kind === 'audio');
+
+    if (receiverTracks.length) {
+      return new MediaStream(receiverTracks);
+    }
+  }
+
+  return null;
+};
+
 const App = ({ interactionId: widgetInteractionId = null }) => {
   const [desktopInteractionId, setDesktopInteractionId] = useState(null);
   const [isRecording, setIsRecording] = useState(false);
@@ -253,6 +314,9 @@ const App = ({ interactionId: widgetInteractionId = null }) => {
   const audioCtxRef = useRef(null);
   const mixedDestRef = useRef(null);
   const webexRef = useRef(null);
+  const activeCallRef = useRef(null);
+  const remoteTrackRef = useRef(null);
+  const activeCallListenerRef = useRef(null);
   const resolvedWidgetInteractionId = normalizeInteractionId(widgetInteractionId);
   const interactionId = resolvedWidgetInteractionId ?? storeInteractionId ?? desktopInteractionId;
 
@@ -419,38 +483,93 @@ const App = ({ interactionId: widgetInteractionId = null }) => {
     mixedDestRef.current = audioCtxRef.current.createMediaStreamDestination();
   };
 
+  const detachCallListener = () => {
+    const activeCall = activeCallRef.current;
+    const listener = activeCallListenerRef.current;
+
+    if (!activeCall || !listener) {
+      return;
+    }
+
+    if (typeof activeCall.off === 'function') {
+      activeCall.off('remote_media', listener);
+    } else if (typeof activeCall.removeListener === 'function') {
+      activeCall.removeListener('remote_media', listener);
+    }
+
+    activeCallListenerRef.current = null;
+  };
+
+  const attachCallListener = (call) => {
+    if (!call || activeCallRef.current === call) {
+      return;
+    }
+
+    detachCallListener();
+    activeCallRef.current = call;
+    remoteTrackRef.current = null;
+
+    if (typeof call.on !== 'function') {
+      return;
+    }
+
+    const listener = (track) => {
+      console.log('[Signature] remote_media track received', track);
+      remoteTrackRef.current = track;
+    };
+
+    call.on('remote_media', listener);
+    activeCallListenerRef.current = listener;
+  };
+
+  useEffect(() => {
+    if (!interactionId || !webexRef.current) {
+      return;
+    }
+
+    const callMatch = findCallingCallForInteraction(webexRef.current, interactionId);
+    setCallingSummary(callMatch.summary);
+
+    if (callMatch.call) {
+      attachCallListener(callMatch.call);
+    }
+  }, [interactionId]);
+
+  useEffect(() => () => {
+    detachCallListener();
+  }, []);
+
   const startRecording = async () => {
     setStatus("Recording Signature...");
     chunksRef.current = [];
     
     try {
       const webex = webexRef.current;
-      let meetingMatch = { meeting: null, summary: 'none' };
-      let callingMatch = { call: null, summary: 'none' };
-
-      if (webex?.meetings?.syncMeetings) {
-        await webex.meetings.syncMeetings();
-        meetingMatch = findMeetingForInteraction(webex, interactionId);
-        setMeetingSummary(meetingMatch.summary);
+      if (!webex) {
+        throw new Error('Webex client is not initialized.');
       }
 
-      if (webex?.calling?.callingClient?.getActiveCalls) {
-        callingMatch = findCallingCallForInteraction(webex, interactionId);
-        setCallingSummary(callingMatch.summary);
+      const callMatch = findCallingCallForInteraction(webex, interactionId);
+      setCallingSummary(callMatch.summary);
+      setMeetingSummary('not-used');
+
+      if (!callMatch.call) {
+        throw new Error('No active WebRTC calling session found for interaction.');
       }
 
-      const target = meetingMatch.meeting || callingMatch.call;
-      const surface = meetingMatch.meeting ? 'meetings' : callingMatch.call ? 'calling' : 'none';
+      attachCallListener(callMatch.call);
+
+      const streams = dedupeAudioStreams(
+        [
+          getLocalStreamFromCall(callMatch.call),
+          getRemoteStreamFromCall(callMatch.call, remoteTrackRef.current)
+        ].filter(Boolean)
+      );
+      const surface = 'webrtc-calling';
       setMediaSurface(surface);
 
-      if (!target) {
-        throw new Error('No active Webex meeting or calling session found for interaction.');
-      }
-
-      const streams = dedupeAudioStreams(collectAudioStreams(target));
-
       if (!streams.length) {
-        throw new Error(`Matched ${surface} session but found no usable audio streams.`);
+        throw new Error('Matched the active WebRTC call, but no exposed audio tracks were found.');
       }
 
       // 2. Mix the streams
@@ -590,7 +709,7 @@ const App = ({ interactionId: widgetInteractionId = null }) => {
           <span className="diagnostics-value">{meetingSummary}</span>
         </div>
         <div className="diagnostics-row">
-          <span className="diagnostics-label">calling sessions</span>
+          <span className="diagnostics-label">webrtc call sessions</span>
           <span className="diagnostics-value">{callingSummary}</span>
         </div>
       </div>
