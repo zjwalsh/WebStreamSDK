@@ -130,6 +130,20 @@ const getObjectValues = (value) => {
   }
 };
 
+const HOST_TASK_SEARCH_LIMIT = 250;
+
+const getObjectEntries = (value) => {
+  if (!value || typeof value !== 'object') {
+    return [];
+  }
+
+  try {
+    return Object.entries(value);
+  } catch {
+    return [];
+  }
+};
+
 const collectAudioStreams = (value, seen = new WeakSet(), depth = 0) => {
   if (!value || depth > 3) {
     return [];
@@ -182,6 +196,108 @@ const dedupeAudioStreams = (streams) => {
   }
 
   return unique;
+};
+
+const isMatchingTaskCandidate = (value, interactionId) => {
+  if (!value || typeof value !== 'object') {
+    return false;
+  }
+
+  const candidateInteractionId = normalizeInteractionId(
+    value?.data?.interactionId || value?.interactionId || collectInteractionId(value)
+  );
+
+  if (!candidateInteractionId || candidateInteractionId !== interactionId) {
+    return false;
+  }
+
+  return (
+    typeof value.on === 'function' ||
+    typeof value.addEventListener === 'function' ||
+    typeof value.accept === 'function'
+  );
+};
+
+const findTaskCandidateInValue = (value, interactionId, path, seen, budget, depth = 0) => {
+  if (!value || typeof value !== 'object' || depth > 4 || budget.count > HOST_TASK_SEARCH_LIMIT) {
+    return null;
+  }
+
+  if (seen.has(value)) {
+    return null;
+  }
+
+  seen.add(value);
+  budget.count += 1;
+
+  if (isMatchingTaskCandidate(value, interactionId)) {
+    return { task: value, path };
+  }
+
+  for (const [key, child] of getObjectEntries(value)) {
+    if (
+      child == null ||
+      typeof child !== 'object' ||
+      key === 'window' ||
+      key === 'document' ||
+      key === 'parent' ||
+      key === 'top'
+    ) {
+      continue;
+    }
+
+    const result = findTaskCandidateInValue(
+      child,
+      interactionId,
+      `${path}.${key}`,
+      seen,
+      budget,
+      depth + 1
+    );
+
+    if (result) {
+      return result;
+    }
+  }
+
+  return null;
+};
+
+const findHostTaskForInteraction = (interactionId) => {
+  if (!interactionId) {
+    return { task: null, summary: 'inactive' };
+  }
+
+  const roots = [
+    ['window.wxcc', window.wxcc],
+    ['window.wxcc.cc', window.wxcc?.cc],
+    ['window.wxcc.agentContact', window.wxcc?.agentContact],
+    ['window.AGENTX_SERVICE', window.AGENTX_SERVICE],
+    ['window.AGENTX_SERVICE.cc', window.AGENTX_SERVICE?.cc],
+    ['window.AGENTX_SERVICE.webex', window.AGENTX_SERVICE?.webex],
+    ['window.AGENTX_SERVICE.agentContact', window.AGENTX_SERVICE?.agentContact],
+    ['window.WxccDesktopSDK', window.WxccDesktopSDK]
+  ];
+
+  const seen = new WeakSet();
+  const budget = { count: 0 };
+
+  for (const [label, root] of roots) {
+    const result = findTaskCandidateInValue(root, interactionId, label, seen, budget);
+    if (result) {
+      return { task: result.task, summary: result.path };
+    }
+  }
+
+  const availableRoots = roots
+    .filter(([, root]) => Boolean(root))
+    .map(([label]) => label)
+    .join(' | ');
+
+  return {
+    task: null,
+    summary: availableRoots ? `searched ${availableRoots}` : 'no host roots'
+  };
 };
 
 const summarizeMeeting = (meeting) => {
@@ -293,6 +409,20 @@ const getRemoteStreamFromCall = (call, remoteTrack) => {
   return null;
 };
 
+const getStreamsFromHostTask = (task, remoteTrack) => {
+  if (!task) {
+    return [];
+  }
+
+  return dedupeAudioStreams(
+    [
+      streamFromTrack(remoteTrack),
+      task?.localAudioStream?.outputStream,
+      ...collectAudioStreams(task)
+    ].filter(Boolean)
+  );
+};
+
 const App = ({ interactionId: widgetInteractionId = null }) => {
   const [desktopInteractionId, setDesktopInteractionId] = useState(null);
   const [isRecording, setIsRecording] = useState(false);
@@ -307,6 +437,7 @@ const App = ({ interactionId: widgetInteractionId = null }) => {
   const [mediaSurface, setMediaSurface] = useState('none');
   const [meetingSummary, setMeetingSummary] = useState('none');
   const [callingSummary, setCallingSummary] = useState('none');
+  const [hostTaskSummary, setHostTaskSummary] = useState('none');
   const prevIdRef = useRef(null);
 
   const mediaRecorderRef = useRef(null);
@@ -315,8 +446,10 @@ const App = ({ interactionId: widgetInteractionId = null }) => {
   const mixedDestRef = useRef(null);
   const webexRef = useRef(null);
   const activeCallRef = useRef(null);
+  const activeTaskRef = useRef(null);
   const remoteTrackRef = useRef(null);
   const activeCallListenerRef = useRef(null);
+  const activeTaskListenerRef = useRef(null);
   const resolvedWidgetInteractionId = normalizeInteractionId(widgetInteractionId);
   const interactionId = resolvedWidgetInteractionId ?? storeInteractionId ?? desktopInteractionId;
 
@@ -500,6 +633,25 @@ const App = ({ interactionId: widgetInteractionId = null }) => {
     activeCallListenerRef.current = null;
   };
 
+  const detachTaskListener = () => {
+    const activeTask = activeTaskRef.current;
+    const listener = activeTaskListenerRef.current;
+
+    if (!activeTask || !listener) {
+      return;
+    }
+
+    if (typeof activeTask.off === 'function') {
+      activeTask.off('task:media', listener);
+    } else if (typeof activeTask.removeListener === 'function') {
+      activeTask.removeListener('task:media', listener);
+    } else if (typeof activeTask.removeEventListener === 'function') {
+      activeTask.removeEventListener('task:media', listener);
+    }
+
+    activeTaskListenerRef.current = null;
+  };
+
   const attachCallListener = (call) => {
     if (!call || activeCallRef.current === call) {
       return;
@@ -522,6 +674,32 @@ const App = ({ interactionId: widgetInteractionId = null }) => {
     activeCallListenerRef.current = listener;
   };
 
+  const attachTaskListener = (task) => {
+    if (!task || activeTaskRef.current === task) {
+      return;
+    }
+
+    detachTaskListener();
+    activeTaskRef.current = task;
+    remoteTrackRef.current = null;
+
+    const listener = (track) => {
+      console.log('[Signature] task:media track received', track);
+      remoteTrackRef.current = track;
+    };
+
+    if (typeof task.on === 'function') {
+      task.on('task:media', listener);
+      activeTaskListenerRef.current = listener;
+      return;
+    }
+
+    if (typeof task.addEventListener === 'function') {
+      task.addEventListener('task:media', listener);
+      activeTaskListenerRef.current = listener;
+    }
+  };
+
   useEffect(() => {
     if (!interactionId || !webexRef.current) {
       return;
@@ -535,8 +713,23 @@ const App = ({ interactionId: widgetInteractionId = null }) => {
     }
   }, [interactionId]);
 
+  useEffect(() => {
+    if (!interactionId) {
+      setHostTaskSummary('inactive');
+      return;
+    }
+
+    const hostTaskMatch = findHostTaskForInteraction(interactionId);
+    setHostTaskSummary(hostTaskMatch.summary);
+
+    if (hostTaskMatch.task) {
+      attachTaskListener(hostTaskMatch.task);
+    }
+  }, [interactionId]);
+
   useEffect(() => () => {
     detachCallListener();
+    detachTaskListener();
   }, []);
 
   const startRecording = async () => {
@@ -544,6 +737,33 @@ const App = ({ interactionId: widgetInteractionId = null }) => {
     chunksRef.current = [];
     
     try {
+      prepareAudioContext();
+
+      const hostTaskMatch = findHostTaskForInteraction(interactionId);
+      setHostTaskSummary(hostTaskMatch.summary);
+
+      if (hostTaskMatch.task) {
+        attachTaskListener(hostTaskMatch.task);
+
+        const hostTaskStreams = getStreamsFromHostTask(hostTaskMatch.task, remoteTrackRef.current);
+        if (hostTaskStreams.length) {
+          setMediaSurface('host-task');
+
+          hostTaskStreams.forEach((stream) => {
+            const source = audioCtxRef.current.createMediaStreamSource(stream);
+            source.connect(mixedDestRef.current);
+          });
+
+          mediaRecorderRef.current = new MediaRecorder(mixedDestRef.current.stream, { mimeType: 'audio/webm' });
+          mediaRecorderRef.current.ondataavailable = (e) => chunksRef.current.push(e.data);
+          mediaRecorderRef.current.onstop = uploadRecording;
+          mediaRecorderRef.current.start();
+          setIsRecording(true);
+          setStatus('Recording Signature from host-task...');
+          return;
+        }
+      }
+
       const webex = webexRef.current;
       if (!webex) {
         throw new Error('Webex client is not initialized.');
@@ -711,6 +931,10 @@ const App = ({ interactionId: widgetInteractionId = null }) => {
         <div className="diagnostics-row">
           <span className="diagnostics-label">webrtc call sessions</span>
           <span className="diagnostics-value">{callingSummary}</span>
+        </div>
+        <div className="diagnostics-row">
+          <span className="diagnostics-label">host task surface</span>
+          <span className="diagnostics-value">{hostTaskSummary}</span>
         </div>
       </div>
       
