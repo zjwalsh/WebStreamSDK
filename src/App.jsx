@@ -118,6 +118,120 @@ const extractInteractionIdFromStore = (state) => {
 
 const resolveDesktopSdk = () => window.WxccDesktopSDK?.Desktop || Desktop;
 
+const getObjectValues = (value) => {
+  if (!value || typeof value !== 'object') {
+    return [];
+  }
+
+  try {
+    return Object.values(value);
+  } catch {
+    return [];
+  }
+};
+
+const collectAudioStreams = (value, seen = new WeakSet(), depth = 0) => {
+  if (!value || depth > 3) {
+    return [];
+  }
+
+  if (typeof MediaStream !== 'undefined' && value instanceof MediaStream) {
+    return value.getAudioTracks().length ? [value] : [];
+  }
+
+  if (typeof MediaStreamTrack !== 'undefined' && value instanceof MediaStreamTrack) {
+    if (value.kind !== 'audio') {
+      return [];
+    }
+
+    const stream = new MediaStream();
+    stream.addTrack(value);
+    return [stream];
+  }
+
+  if (typeof value !== 'object') {
+    return [];
+  }
+
+  if (seen.has(value)) {
+    return [];
+  }
+
+  seen.add(value);
+
+  const streams = [];
+  for (const item of getObjectValues(value)) {
+    streams.push(...collectAudioStreams(item, seen, depth + 1));
+  }
+
+  return streams;
+};
+
+const dedupeAudioStreams = (streams) => {
+  const unique = [];
+  const keys = new Set();
+
+  for (const stream of streams) {
+    const trackIds = stream.getAudioTracks().map((track) => track.id).sort().join('|');
+    const key = trackIds || `stream-${unique.length}`;
+
+    if (!keys.has(key)) {
+      keys.add(key);
+      unique.push(stream);
+    }
+  }
+
+  return unique;
+};
+
+const summarizeMeeting = (meeting) => {
+  if (!meeting) {
+    return 'none';
+  }
+
+  return [meeting.id, meeting.correlationId].filter(Boolean).join(' / ') || 'unknown meeting';
+};
+
+const summarizeCall = (call) => {
+  if (!call) {
+    return 'none';
+  }
+
+  const correlationId = typeof call.getCorrelationId === 'function' ? call.getCorrelationId() : null;
+  const callId = typeof call.getCallId === 'function' ? call.getCallId() : null;
+  return [correlationId, callId].filter(Boolean).join(' / ') || 'unknown call';
+};
+
+const findMeetingForInteraction = (webex, interactionId) => {
+  const meetings = getObjectValues(webex?.meetings?.getAllMeetings?.());
+  const meeting = meetings.find((candidate) => {
+    const id = candidate?.id || '';
+    const correlationId = candidate?.correlationId || '';
+    return id.includes(interactionId) || correlationId === interactionId;
+  });
+
+  return {
+    meeting,
+    summary: meetings.map(summarizeMeeting).join(' | ') || 'none'
+  };
+};
+
+const findCallingCallForInteraction = (webex, interactionId) => {
+  const activeCallsByLine = webex?.calling?.callingClient?.getActiveCalls?.() || {};
+  const activeCalls = Object.values(activeCallsByLine).flat();
+  const connectedCall = webex?.calling?.callingClient?.getConnectedCall?.();
+  const call = activeCalls.find((candidate) => {
+    const correlationId = typeof candidate?.getCorrelationId === 'function' ? candidate.getCorrelationId() : '';
+    const callId = typeof candidate?.getCallId === 'function' ? candidate.getCallId() : '';
+    return correlationId === interactionId || callId === interactionId;
+  }) || connectedCall;
+
+  return {
+    call,
+    summary: activeCalls.map(summarizeCall).join(' | ') || 'none'
+  };
+};
+
 const App = ({ interactionId: widgetInteractionId = null }) => {
   const [desktopInteractionId, setDesktopInteractionId] = useState(null);
   const [isRecording, setIsRecording] = useState(false);
@@ -129,6 +243,9 @@ const App = ({ interactionId: widgetInteractionId = null }) => {
   const [hasAgentService, setHasAgentService] = useState(false);
   const [hasGlobalSdk, setHasGlobalSdk] = useState(false);
   const [isFramed, setIsFramed] = useState(false);
+  const [mediaSurface, setMediaSurface] = useState('none');
+  const [meetingSummary, setMeetingSummary] = useState('none');
+  const [callingSummary, setCallingSummary] = useState('none');
   const prevIdRef = useRef(null);
 
   const mediaRecorderRef = useRef(null);
@@ -307,16 +424,37 @@ const App = ({ interactionId: widgetInteractionId = null }) => {
     chunksRef.current = [];
     
     try {
-      // 1. Get the local (Agent) and remote (Customer) streams from Webex SDK
-      await webexRef.current.meetings.syncMeetings();
-      const meetings = webexRef.current.meetings.getAllMeetings();
-      const meeting = Object.values(meetings).find(m => m.id.includes(interactionId) || m.correlationId === interactionId);
+      const webex = webexRef.current;
+      let meetingMatch = { meeting: null, summary: 'none' };
+      let callingMatch = { call: null, summary: 'none' };
 
-      if (!meeting) throw new Error("No active meeting found for interaction.");
+      if (webex?.meetings?.syncMeetings) {
+        await webex.meetings.syncMeetings();
+        meetingMatch = findMeetingForInteraction(webex, interactionId);
+        setMeetingSummary(meetingMatch.summary);
+      }
+
+      if (webex?.calling?.callingClient?.getActiveCalls) {
+        callingMatch = findCallingCallForInteraction(webex, interactionId);
+        setCallingSummary(callingMatch.summary);
+      }
+
+      const target = meetingMatch.meeting || callingMatch.call;
+      const surface = meetingMatch.meeting ? 'meetings' : callingMatch.call ? 'calling' : 'none';
+      setMediaSurface(surface);
+
+      if (!target) {
+        throw new Error('No active Webex meeting or calling session found for interaction.');
+      }
+
+      const streams = dedupeAudioStreams(collectAudioStreams(target));
+
+      if (!streams.length) {
+        throw new Error(`Matched ${surface} session but found no usable audio streams.`);
+      }
 
       // 2. Mix the streams
-      const streams = [meeting.localAudioStream, meeting.remoteAudioStream];
-      streams.forEach(stream => {
+      streams.forEach((stream) => {
         if (stream) {
           const source = audioCtxRef.current.createMediaStreamSource(stream);
           source.connect(mixedDestRef.current);
@@ -330,6 +468,7 @@ const App = ({ interactionId: widgetInteractionId = null }) => {
       
       mediaRecorderRef.current.start();
       setIsRecording(true);
+      setStatus(`Recording Signature from ${surface}...`);
     } catch (err) {
       console.error("Recording Start Error:", err);
       setStatus(err?.message || "Error starting recording");
@@ -441,6 +580,18 @@ const App = ({ interactionId: widgetInteractionId = null }) => {
         <div className="diagnostics-row">
           <span className="diagnostics-label">last desktop event</span>
           <span className="diagnostics-value">{lastEvent}</span>
+        </div>
+        <div className="diagnostics-row">
+          <span className="diagnostics-label">media surface</span>
+          <span className="diagnostics-value">{mediaSurface}</span>
+        </div>
+        <div className="diagnostics-row">
+          <span className="diagnostics-label">meeting sessions</span>
+          <span className="diagnostics-value">{meetingSummary}</span>
+        </div>
+        <div className="diagnostics-row">
+          <span className="diagnostics-label">calling sessions</span>
+          <span className="diagnostics-value">{callingSummary}</span>
         </div>
       </div>
       
