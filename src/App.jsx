@@ -97,6 +97,8 @@ const extractInteractionIdFromStore = (state) => {
   );
 };
 
+const resolveDesktopSdk = () => window.WxccDesktopSDK?.Desktop || Desktop;
+
 const App = ({ interactionId: widgetInteractionId = null }) => {
   const [desktopInteractionId, setDesktopInteractionId] = useState(null);
   const [isRecording, setIsRecording] = useState(false);
@@ -106,6 +108,7 @@ const App = ({ interactionId: widgetInteractionId = null }) => {
   const [storeInteractionId, setStoreInteractionId] = useState(null);
   const [hasStoreBridge, setHasStoreBridge] = useState(false);
   const [hasAgentService, setHasAgentService] = useState(false);
+  const [hasGlobalSdk, setHasGlobalSdk] = useState(false);
   const [isFramed, setIsFramed] = useState(false);
   const prevIdRef = useRef(null);
 
@@ -120,11 +123,13 @@ const App = ({ interactionId: widgetInteractionId = null }) => {
     setIsFramed(window.self !== window.top);
     setHasAgentService(Boolean(window.AGENTX_SERVICE));
     setHasStoreBridge(Boolean(window.$Store?.getState));
+    setHasGlobalSdk(Boolean(window.WxccDesktopSDK?.Desktop));
   }, []);
 
   useEffect(() => {
     let isMounted = true;
     let unsubscribeStore;
+    const desktopSdk = resolveDesktopSdk();
 
     const initializeDesktop = async () => {
       const initialStoreState = getStoreState();
@@ -137,7 +142,7 @@ const App = ({ interactionId: widgetInteractionId = null }) => {
       }
 
       try {
-        Desktop.config.init({
+        desktopSdk.config.init({
           widgetName: 'wxcc-signature-widget',
           widgetProvider: 'Amplify'
         });
@@ -146,7 +151,7 @@ const App = ({ interactionId: widgetInteractionId = null }) => {
       }
 
       try {
-        const taskMap = await Desktop.actions.getTaskMap();
+        const taskMap = await desktopSdk.actions.getTaskMap();
         const currentInteractionId = extractInteractionIdFromTaskMap(taskMap);
         if (isMounted) {
           setTaskMapInteractionId(currentInteractionId);
@@ -161,7 +166,7 @@ const App = ({ interactionId: widgetInteractionId = null }) => {
       }
 
       try {
-        const token = await Desktop.actions.getToken();
+        const token = await desktopSdk.actions.getToken();
         webexRef.current = Webex.init({
           config: { meetings: { deviceType: 'WEB' } },
           credentials: { access_token: token || 'REPLACE_WITH_AGENT_OAUTH_TOKEN' }
@@ -205,7 +210,7 @@ const App = ({ interactionId: widgetInteractionId = null }) => {
       };
 
       try {
-        Desktop.agentContact.addEventListener(eventName, listener);
+        desktopSdk.agentContact.addEventListener(eventName, listener);
       } catch (err) {
         console.warn(`[Signature] failed to subscribe to ${eventName}`, err);
       }
@@ -222,16 +227,17 @@ const App = ({ interactionId: widgetInteractionId = null }) => {
       const currentStoreInteractionId = extractInteractionIdFromStore(currentStoreState);
       setHasStoreBridge(Boolean(window.$Store?.getState));
       setHasAgentService(Boolean(window.AGENTX_SERVICE));
+      setHasGlobalSdk(Boolean(window.WxccDesktopSDK?.Desktop));
       setStoreInteractionId(currentStoreInteractionId);
 
       try {
-        const taskMap = await Desktop.actions.getTaskMap();
+        const taskMap = await desktopSdk.actions.getTaskMap();
         const currentInteractionId = extractInteractionIdFromTaskMap(taskMap);
         setTaskMapInteractionId(currentInteractionId);
         setDesktopInteractionId(currentInteractionId);
       } catch (err) {
         try {
-          const id = Desktop.agentContact.taskSelected?.interactionId || null;
+          const id = desktopSdk.agentContact.taskSelected?.interactionId || null;
           setDesktopInteractionId(id);
         } catch (fallbackError) {
           console.warn('[Signature] contact polling failed', fallbackError);
@@ -247,7 +253,7 @@ const App = ({ interactionId: widgetInteractionId = null }) => {
       window.clearInterval(poll);
       for (const { eventName, listener } of listeners) {
         try {
-          Desktop.agentContact.removeEventListener(eventName, listener);
+          desktopSdk.agentContact.removeEventListener(eventName, listener);
         } catch (err) {
           console.warn(`[Signature] failed to remove ${eventName}`, err);
         }
@@ -403,6 +409,10 @@ const App = ({ interactionId: widgetInteractionId = null }) => {
         <div className="diagnostics-row">
           <span className="diagnostics-label">AGENTX_SERVICE</span>
           <span className="diagnostics-value">{hasAgentService ? 'yes' : 'no'}</span>
+        </div>
+        <div className="diagnostics-row">
+          <span className="diagnostics-label">WxccDesktopSDK global</span>
+          <span className="diagnostics-value">{hasGlobalSdk ? 'yes' : 'no'}</span>
         </div>
         <div className="diagnostics-row">
           <span className="diagnostics-label">last desktop event</span>
