@@ -273,8 +273,11 @@ const findHostTaskForInteraction = (interactionId) => {
     ['window.wxcc.cc', window.wxcc?.cc],
     ['window.wxcc.agentContact', window.wxcc?.agentContact],
     ['window.AGENTX_SERVICE', window.AGENTX_SERVICE],
+    ['window.AGENTX_SERVICE.SERVICE', window.AGENTX_SERVICE?.SERVICE],
     ['window.AGENTX_SERVICE.cc', window.AGENTX_SERVICE?.cc],
+    ['window.AGENTX_SERVICE.SERVICE.cc', window.AGENTX_SERVICE?.SERVICE?.cc],
     ['window.AGENTX_SERVICE.webex', window.AGENTX_SERVICE?.webex],
+    ['window.AGENTX_SERVICE.SERVICE.webex', window.AGENTX_SERVICE?.SERVICE?.webex],
     ['window.AGENTX_SERVICE.agentContact', window.AGENTX_SERVICE?.agentContact],
     ['window.WxccDesktopSDK', window.WxccDesktopSDK]
   ];
@@ -423,6 +426,144 @@ const getStreamsFromHostTask = (task, remoteTrack) => {
   );
 };
 
+const getHostWebCallingService = () => {
+  const candidates = [
+    ['window.AGENTX_SERVICE.SERVICE.webCalling', window.AGENTX_SERVICE?.SERVICE?.webCalling],
+    ['window.AGENTX_SERVICE.webCalling', window.AGENTX_SERVICE?.webCalling],
+    ['window.wxcc.cc.webCalling', window.wxcc?.cc?.webCalling],
+    ['window.wxcc.webCalling', window.wxcc?.webCalling]
+  ];
+
+  for (const [label, service] of candidates) {
+    if (service) {
+      return { label, service, candidates };
+    }
+  }
+
+  return { label: 'none', service: null, candidates };
+};
+
+const flattenActiveCalls = (activeCallsByLine) => {
+  if (!activeCallsByLine || typeof activeCallsByLine !== 'object') {
+    return [];
+  }
+
+  return Object.values(activeCallsByLine).flat().filter(Boolean);
+};
+
+const getCallKey = (call) => {
+  if (!call) {
+    return null;
+  }
+
+  const callId = typeof call.getCallId === 'function' ? call.getCallId() : call.callId;
+  const correlationId = typeof call.getCorrelationId === 'function'
+    ? call.getCorrelationId()
+    : call.correlationId;
+
+  return normalizeInteractionId(callId || correlationId);
+};
+
+const getMappedCallIdForInteraction = (callTaskMap, interactionId) => {
+  if (!callTaskMap || !interactionId) {
+    return null;
+  }
+
+  const entries = callTaskMap instanceof Map
+    ? Array.from(callTaskMap.entries())
+    : Object.entries(callTaskMap);
+
+  for (const [callId, taskId] of entries) {
+    if (normalizeInteractionId(taskId) === interactionId) {
+      return normalizeInteractionId(callId);
+    }
+  }
+
+  return null;
+};
+
+const findHostWebCallingForInteraction = (interactionId) => {
+  const { label, service, candidates } = getHostWebCallingService();
+
+  if (!service) {
+    return {
+      service: null,
+      call: null,
+      summary: candidates
+        .filter(([, candidate]) => Boolean(candidate))
+        .map(([candidateLabel]) => candidateLabel)
+        .join(' | ') || 'none'
+    };
+  }
+
+  const serviceCandidates = [
+    { label, service },
+    ...candidates
+      .filter(([candidateLabel, candidateService]) => candidateService && candidateLabel !== label)
+      .map(([candidateLabel, candidateService]) => ({ label: candidateLabel, service: candidateService }))
+  ];
+
+  let bestMatch = null;
+
+  for (const candidate of serviceCandidates) {
+    const activeCalls = flattenActiveCalls(
+      candidate.service.getActiveCalls?.() || candidate.service.callingClient?.getActiveCalls?.()
+    );
+    const connectedCall = candidate.service.getConnectedCall?.()
+      || candidate.service.callingClient?.getConnectedCall?.();
+    const mappedCallId = getMappedCallIdForInteraction(candidate.service.callTaskMap, interactionId);
+    const call = activeCalls.find((activeCall) => {
+      const callKey = getCallKey(activeCall);
+      return callKey === interactionId || (mappedCallId && callKey === mappedCallId);
+    }) || candidate.service.call || connectedCall || null;
+
+    const score = [mappedCallId, activeCalls.length, candidate.service.call ? 1 : 0]
+      .filter(Boolean)
+      .length;
+
+    if (!bestMatch || score > bestMatch.score) {
+      bestMatch = {
+        ...candidate,
+        score,
+        activeCalls,
+        connectedCall,
+        mappedCallId,
+        call
+      };
+    }
+
+    if (mappedCallId || activeCalls.length || candidate.service.call) {
+      break;
+    }
+  }
+
+  const matchedService = bestMatch?.service || service;
+  const matchedLabel = bestMatch?.label || label;
+  const activeCalls = bestMatch?.activeCalls || [];
+  const mappedCallId = bestMatch?.mappedCallId || null;
+  const call = bestMatch?.call || null;
+  const keyList = Object.keys(matchedService).sort().slice(0, 10).join(',') || 'no-keys';
+  const agentxKeyList = Object.keys(window.AGENTX_SERVICE || {}).sort().slice(0, 10).join(',') || 'no-agentx-keys';
+  const callSummary = activeCalls.map(summarizeCall).join(' | ') || 'none';
+  const mappingSummary = mappedCallId ? `mapped:${mappedCallId}` : 'mapped:none';
+  const serviceFlags = [
+    typeof matchedService.on === 'function' ? 'on' : null,
+    typeof matchedService.off === 'function' ? 'off' : null,
+    matchedService.call ? 'call' : null,
+    matchedService.callingClient ? 'callingClient' : null,
+    matchedService.callTaskMap ? 'callTaskMap' : null
+  ].filter(Boolean).join(',') || 'no-flags';
+  const mapSize = matchedService.callTaskMap instanceof Map
+    ? matchedService.callTaskMap.size
+    : Object.keys(matchedService.callTaskMap || {}).length;
+
+  return {
+    service: matchedService,
+    call,
+    summary: `${matchedLabel}; ${mappingSummary}; map:${mapSize}; agentx:${agentxKeyList}; keys:${keyList}; flags:${serviceFlags}; calls:${callSummary}`
+  };
+};
+
 const App = ({ interactionId: widgetInteractionId = null }) => {
   const [desktopInteractionId, setDesktopInteractionId] = useState(null);
   const [isRecording, setIsRecording] = useState(false);
@@ -438,6 +579,7 @@ const App = ({ interactionId: widgetInteractionId = null }) => {
   const [meetingSummary, setMeetingSummary] = useState('none');
   const [callingSummary, setCallingSummary] = useState('none');
   const [hostTaskSummary, setHostTaskSummary] = useState('none');
+  const [hostWebCallingSummary, setHostWebCallingSummary] = useState('none');
   const prevIdRef = useRef(null);
 
   const mediaRecorderRef = useRef(null);
@@ -447,9 +589,11 @@ const App = ({ interactionId: widgetInteractionId = null }) => {
   const webexRef = useRef(null);
   const activeCallRef = useRef(null);
   const activeTaskRef = useRef(null);
+  const activeHostWebCallingRef = useRef(null);
   const remoteTrackRef = useRef(null);
   const activeCallListenerRef = useRef(null);
   const activeTaskListenerRef = useRef(null);
+  const activeHostWebCallingListenerRef = useRef(null);
   const resolvedWidgetInteractionId = normalizeInteractionId(widgetInteractionId);
   const interactionId = resolvedWidgetInteractionId ?? storeInteractionId ?? desktopInteractionId;
 
@@ -652,6 +796,23 @@ const App = ({ interactionId: widgetInteractionId = null }) => {
     activeTaskListenerRef.current = null;
   };
 
+  const detachHostWebCallingListener = () => {
+    const service = activeHostWebCallingRef.current;
+    const listener = activeHostWebCallingListenerRef.current;
+
+    if (!service || !listener) {
+      return;
+    }
+
+    if (typeof service.off === 'function') {
+      service.off('remote_media', listener);
+    } else if (typeof service.removeListener === 'function') {
+      service.removeListener('remote_media', listener);
+    }
+
+    activeHostWebCallingListenerRef.current = null;
+  };
+
   const attachCallListener = (call) => {
     if (!call || activeCallRef.current === call) {
       return;
@@ -700,6 +861,27 @@ const App = ({ interactionId: widgetInteractionId = null }) => {
     }
   };
 
+  const attachHostWebCallingListener = (service) => {
+    if (!service || activeHostWebCallingRef.current === service) {
+      return;
+    }
+
+    detachHostWebCallingListener();
+    activeHostWebCallingRef.current = service;
+
+    if (typeof service.on !== 'function') {
+      return;
+    }
+
+    const listener = (track) => {
+      console.log('[Signature] host remote_media track received', track);
+      remoteTrackRef.current = track;
+    };
+
+    service.on('remote_media', listener);
+    activeHostWebCallingListenerRef.current = listener;
+  };
+
   useEffect(() => {
     if (!interactionId || !webexRef.current) {
       return;
@@ -710,6 +892,24 @@ const App = ({ interactionId: widgetInteractionId = null }) => {
 
     if (callMatch.call) {
       attachCallListener(callMatch.call);
+    }
+  }, [interactionId]);
+
+  useEffect(() => {
+    if (!interactionId) {
+      setHostWebCallingSummary('inactive');
+      return;
+    }
+
+    const hostWebCallingMatch = findHostWebCallingForInteraction(interactionId);
+    setHostWebCallingSummary(hostWebCallingMatch.summary);
+
+    if (hostWebCallingMatch.service) {
+      attachHostWebCallingListener(hostWebCallingMatch.service);
+    }
+
+    if (hostWebCallingMatch.call) {
+      attachCallListener(hostWebCallingMatch.call);
     }
   }, [interactionId]);
 
@@ -730,6 +930,7 @@ const App = ({ interactionId: widgetInteractionId = null }) => {
   useEffect(() => () => {
     detachCallListener();
     detachTaskListener();
+    detachHostWebCallingListener();
   }, []);
 
   const startRecording = async () => {
@@ -738,6 +939,41 @@ const App = ({ interactionId: widgetInteractionId = null }) => {
     
     try {
       prepareAudioContext();
+
+      const hostWebCallingMatch = findHostWebCallingForInteraction(interactionId);
+      setHostWebCallingSummary(hostWebCallingMatch.summary);
+
+      if (hostWebCallingMatch.service) {
+        attachHostWebCallingListener(hostWebCallingMatch.service);
+      }
+
+      if (hostWebCallingMatch.call) {
+        attachCallListener(hostWebCallingMatch.call);
+
+        const hostWebCallingStreams = dedupeAudioStreams(
+          [
+            getLocalStreamFromCall(hostWebCallingMatch.call),
+            getRemoteStreamFromCall(hostWebCallingMatch.call, remoteTrackRef.current)
+          ].filter(Boolean)
+        );
+
+        if (hostWebCallingStreams.length) {
+          setMediaSurface('host-webcalling');
+
+          hostWebCallingStreams.forEach((stream) => {
+            const source = audioCtxRef.current.createMediaStreamSource(stream);
+            source.connect(mixedDestRef.current);
+          });
+
+          mediaRecorderRef.current = new MediaRecorder(mixedDestRef.current.stream, { mimeType: 'audio/webm' });
+          mediaRecorderRef.current.ondataavailable = (e) => chunksRef.current.push(e.data);
+          mediaRecorderRef.current.onstop = uploadRecording;
+          mediaRecorderRef.current.start();
+          setIsRecording(true);
+          setStatus('Recording Signature from host-webcalling...');
+          return;
+        }
+      }
 
       const hostTaskMatch = findHostTaskForInteraction(interactionId);
       setHostTaskSummary(hostTaskMatch.summary);
@@ -935,6 +1171,10 @@ const App = ({ interactionId: widgetInteractionId = null }) => {
         <div className="diagnostics-row">
           <span className="diagnostics-label">host task surface</span>
           <span className="diagnostics-value">{hostTaskSummary}</span>
+        </div>
+        <div className="diagnostics-row">
+          <span className="diagnostics-label">host webcalling</span>
+          <span className="diagnostics-value">{hostWebCallingSummary}</span>
         </div>
       </div>
       
