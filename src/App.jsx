@@ -51,6 +51,25 @@ const collectInteractionId = (value) => {
   return null;
 };
 
+const normalizeInteractionId = (value) => {
+  if (value == null) {
+    return null;
+  }
+
+  const normalized = typeof value === 'string' ? value.trim() : value;
+
+  if (
+    normalized === '' ||
+    normalized === 'null' ||
+    normalized === 'undefined' ||
+    (typeof normalized === 'string' && normalized.startsWith('$STORE.'))
+  ) {
+    return null;
+  }
+
+  return normalized;
+};
+
 const extractInteractionIdFromTaskMap = (taskMap) => {
   if (!taskMap) {
     return null;
@@ -117,7 +136,8 @@ const App = ({ interactionId: widgetInteractionId = null }) => {
   const audioCtxRef = useRef(null);
   const mixedDestRef = useRef(null);
   const webexRef = useRef(null);
-  const interactionId = widgetInteractionId ?? storeInteractionId ?? desktopInteractionId;
+  const resolvedWidgetInteractionId = normalizeInteractionId(widgetInteractionId);
+  const interactionId = resolvedWidgetInteractionId ?? storeInteractionId ?? desktopInteractionId;
 
   useEffect(() => {
     setIsFramed(window.self !== window.top);
@@ -259,7 +279,7 @@ const App = ({ interactionId: widgetInteractionId = null }) => {
         }
       }
     };
-  }, [widgetInteractionId]);
+  }, [resolvedWidgetInteractionId]);
 
   useEffect(() => {
     if (interactionId && interactionId !== prevIdRef.current) {
@@ -378,7 +398,7 @@ const App = ({ interactionId: widgetInteractionId = null }) => {
       <h3>Telephonic Signature</h3>
       <div className="status-badge">{status}</div>
       <p>Interaction: {interactionId || "None"}</p>
-      <p>Last event: {widgetInteractionId ? 'widget-prop' : lastEvent}</p>
+      <p>Last event: {resolvedWidgetInteractionId ? 'widget-prop' : lastEvent}</p>
 
       <div className="diagnostics-panel">
         <div className="diagnostics-title">Diagnostics</div>
@@ -389,6 +409,10 @@ const App = ({ interactionId: widgetInteractionId = null }) => {
         <div className="diagnostics-row">
           <span className="diagnostics-label">prop interactionId</span>
           <span className="diagnostics-value">{widgetInteractionId || 'None'}</span>
+        </div>
+        <div className="diagnostics-row">
+          <span className="diagnostics-label">resolved prop interactionId</span>
+          <span className="diagnostics-value">{resolvedWidgetInteractionId || 'None'}</span>
         </div>
         <div className="diagnostics-row">
           <span className="diagnostics-label">taskMap interactionId</span>
